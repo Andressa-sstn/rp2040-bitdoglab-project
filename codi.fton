@@ -1,0 +1,104 @@
+#include <stdio.h>
+#include "pico/stdlib.h"
+#include "hardware/adc.h"
+#include "hardware/pwm.h"
+#include "hardware/i2c.h"
+#include "ssd1306.h"
+
+#define LED_RED 11
+#define LED_GREEN 12
+#define LED_BLUE 13
+#define JOYSTICK_X 26
+#define JOYSTICK_Y 27
+#define JOYSTICK_BUTTON 22
+#define BUTTON_A 5
+#define I2C_SDA 14
+#define I2C_SCL 15
+
+// Variáveis globais
+volatile bool led_state = false;
+volatile bool pwm_enabled = true;
+volatile int border_style = 0;
+ssd1306_t display;
+
+void joystick_button_callback(uint gpio, uint32_t events) {
+    led_state = !led_state;
+    gpio_put(LED_GREEN, led_state);
+    border_style = (border_style + 1) % 3;
+}
+
+void button_a_callback(uint gpio, uint32_t events) {
+    pwm_enabled = !pwm_enabled;
+    if (!pwm_enabled) {
+        pwm_set_gpio_level(LED_RED, 0);
+        pwm_set_gpio_level(LED_BLUE, 0);
+    }
+}
+
+void init_pwm(uint gpio) {
+    gpio_set_function(gpio, GPIO_FUNC_PWM);
+    uint slice_num = pwm_gpio_to_slice_num(gpio);
+    pwm_config config = pwm_get_default_config();
+    pwm_config_set_wrap(&config, 4095);
+    pwm_init(slice_num, &config, true);
+}
+
+void init_display() {
+    i2c_init(i2c_default, 400000);
+    gpio_set_function(I2C_SDA, GPIO_FUNC_I2C);
+    gpio_set_function(I2C_SCL, GPIO_FUNC_I2C);
+    gpio_pull_up(I2C_SDA);
+    gpio_pull_up(I2C_SCL);
+    ssd1306_init(&display, 128, 64, i2c_default, 0x3C);
+    ssd1306_clear(&display);
+}
+
+int main() {
+    stdio_init_all();
+    adc_init();
+    adc_gpio_init(JOYSTICK_X);
+    adc_gpio_init(JOYSTICK_Y);
+    gpio_init(LED_GREEN);
+    gpio_set_dir(LED_GREEN, GPIO_OUT);
+    gpio_init(JOYSTICK_BUTTON);
+    gpio_set_dir(JOYSTICK_BUTTON, GPIO_IN);
+    gpio_pull_up(JOYSTICK_BUTTON);
+    gpio_set_irq_enabled_with_callback(JOYSTICK_BUTTON, GPIO_IRQ_EDGE_FALL, true, &joystick_button_callback);
+    gpio_init(BUTTON_A);
+    gpio_set_dir(BUTTON_A, GPIO_IN);
+    gpio_pull_up(BUTTON_A);
+    gpio_set_irq_enabled_with_callback(BUTTON_A, GPIO_IRQ_EDGE_FALL, true, &button_a_callback);
+    init_pwm(LED_RED);
+    init_pwm(LED_BLUE);
+    init_display();
+
+    int square_x = 60, square_y = 28;
+
+    while (true) {
+        adc_select_input(0);
+        uint16_t x_value = adc_read();
+        adc_select_input(1);
+        uint16_t y_value = adc_read();
+        
+        if (pwm_enabled) {
+            pwm_set_gpio_level(LED_RED, abs(x_value - 2048));
+            pwm_set_gpio_level(LED_BLUE, abs(y_value - 2048));
+        }
+        
+        square_x = (x_value * 112) / 4095 + 8;
+        square_y = (y_value * 48) / 4095 + 8;
+        
+        ssd1306_clear(&display);
+        ssd1306_draw_rect(&display, square_x, square_y, 8, 8);
+        
+        // Desenho da borda conforme o estado do botão
+        if (border_style == 1) {
+            ssd1306_draw_rect(&display, 0, 0, 128, 64);
+        } else if (border_style == 2) {
+            ssd1306_draw_rect(&display, 2, 2, 124, 60);
+        }
+        
+        ssd1306_update(&display);
+        sleep_ms(50);
+    }
+}
